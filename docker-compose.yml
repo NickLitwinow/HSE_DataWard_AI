@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./.env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - DATABASE_URL=postgresql://user:password@db/dataward_ai_db
+      - REDIS_URL=redis://redis:6379
+      - OLLAMA_API_URL=http://ollama:11434
+    networks:
+      - dataward_ai_network
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    container_name: db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    env_file:
+      - ./.env
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=dataward_ai_db
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d dataward_ai_db"]
+    restart: always
+    networks:
+      - dataward_ai_network
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - dataward_ai_network
+    command: serve
+    restart: unless-stopped
+
+  ollama-puller:
+    image: ollama/ollama:latest
+    container_name: ollama-puller
+    depends_on:
+      - ollama
+    networks:
+      - dataward_ai_network
+    environment:
+      - OLLAMA_HOST=ollama
+    entrypoint: sh
+    command: -c "sleep 10 && ollama pull llama3"
+    restart: on-failure
+
+  frontend:
+    build: ./frontend
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    depends_on:
+      - backend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+
+volumes:
+  postgres_data:
+  ollama_data:
+
+networks:
+  dataward_ai_network:
+    driver: bridge 
